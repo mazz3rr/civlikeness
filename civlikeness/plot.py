@@ -17,7 +17,7 @@ import enum
 from pathlib import Path
 
 import math
-from typing import NamedTuple, Self
+from typing import Any, NamedTuple, Self
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -25,6 +25,7 @@ import openpyxl
 from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection
 from matplotlib.colors import LinearSegmentedColormap
+from numpy import dtype, ndarray
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -200,7 +201,11 @@ class Plotter:
             ws = WarShare.from_data(vals[WS_COL - 1])
             self._rows.append(DataRow(game, chassis, house, ws))
 
-    def _annotate(self) -> None:
+    def _annotate(
+        self,
+        iter_lim: int = 5000,
+        time_lim: float | None = None
+    ) -> None:
         # Label every dot with adjustText, passing the scatter points themselves as
         # obstacles. The key parameters that make this work for the dense top-right
         # cluster (~20 games in a 4x2.5 area):
@@ -244,7 +249,8 @@ class Plotter:
                 # Minimum leader-line length — ensures each label is pulled far
                 # enough from its dot to be traceable.
                 min_arrow_len=15,
-                iter_lim=5000,
+                iter_lim=iter_lim,
+                time_lim=time_lim,
                 # time_lim removed — let iter_lim drive convergence.
                 # Let labels move freely in all directions into the empty space.
                 only_move={
@@ -351,18 +357,28 @@ class Plotter:
                     zorder=2,
                 )
 
-    def plot(self) -> None:
-        print("Loading data...")
-        self._load_rows()
+    def _prepare_plot(self, name="") -> tuple[
+        ndarray[tuple[Any, ...], dtype[Any]], ndarray[tuple[Any, ...], dtype[Any]]]:
+        if not self._rows:
+            print("Loading data...")
+            self._load_rows()
 
-        print("Preparing plot...")
-        x = np.array([row[1] for row in self._rows], dtype=float)   # Chassis 0..30
-        y = np.array([row[2] for row in self._rows], dtype=float)   # House   0..10
+        msg = f"Preparing {name} plot..." if name else "Preparing plot..."
+        print(msg)
+
+        if self._cmap is None:
+            self._cmap = color_map()
+
+        x = np.array([row.chassis for row in self._rows], dtype=float)
+        y = np.array([row.house for row in self._rows], dtype=float)
+
+        return x, y
+
+    def plot(self) -> None:
+        x, y = self._prepare_plot()
 
         # Color by total score (Chassis + House) on the nominal 0-40 scale.
         totals = x + y
-
-        self._cmap = color_map()
 
         fig, self._ax = plt.subplots(figsize=(16, 9))
 
@@ -414,6 +430,82 @@ class Plotter:
         fig.savefig(self._output_pgn, dpi=150)
         print(f"Plotted {len(self._rows)} games -> {self._output_pgn.resolve()}")
 
+    def plot_ws(self) -> None:
+        """Plot Chassis vs. House, coloring games by WarShare.
+
+        WarShare values 0-100 use the same viridis-to-red colormap as the
+        total-score plot. Games with WarShare == "N/A" are shown in grey.
+        """
+        x, y = self._prepare_plot(name="Warshare")
+
+        # Map the five numeric WarShare levels to 0, 25, 50, 75, 100.
+        ws_values = np.array(
+            [
+                row.warshare.value if not row.warshare.is_na else np.nan
+                for row in self._rows
+            ],
+            dtype=float,
+        )
+
+        grey = "0.55"
+        self._cmap.set_bad(grey)
+
+        fig, self._ax = plt.subplots(figsize=(16, 9))
+
+        # One scatter for every game. NaN WarShare values are masked by the
+        # colormap and drawn in the "bad" grey color.
+        self._sc = self._ax.scatter(
+            x,
+            y,
+            c=ws_values,
+            cmap=self._cmap,
+            vmin=0,
+            vmax=100,
+            s=70,
+            edgecolors="white",
+            linewidths=0.6,
+            zorder=3,
+        )
+
+        self._ax.set_xlim(-1, 37)
+        self._ax.set_ylim(-0.5, 11.5)
+        self._ax.set_aspect("equal", adjustable="box")
+
+        self._annotate(iter_lim=800, time_lim=20)
+
+        self._ax.set_xlabel("Chassis (P1+P2+P3+P4+P6a+P7) / 30")
+        self._ax.set_ylabel("House (P5+P6b) / 10")
+        self._ax.set_title("Civ-likeness: Chassis vs. House, colored by WarShare")
+
+        self._ax.set_xticks(np.arange(0, 31, 2))
+        self._ax.set_yticks(np.arange(0, 11, 1))
+        self._ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
+
+        # Colorbar on the left, explicitly showing the five WarShare levels.
+        cbar = fig.colorbar(
+            self._sc,
+            ax=self._ax,
+            location="left",
+            shrink=0.7,
+            pad=0.02,
+        )
+        cbar.set_label("WarShare")
+        cbar.set_ticks([0, 25, 50, 75, 100])
+        cbar.set_ticklabels(["0 %", "25 %", "50 %", "75 %", "100 %"])
+        cbar.set_label("WarShare (grey = N/A)")
+
+        self._plot_diagonal()
+
+        fig.tight_layout()
+
+        output_path = self._output_pgn.with_name(
+            self._output_pgn.stem + "_ws" + self._output_pgn.suffix
+        )
+        fig.savefig(output_path, dpi=150)
+        print(f"Plotted {len(self._rows)} games -> {output_path.resolve()}")
+
 
 if __name__ == "__main__":
-    Plotter().plot()
+    plotter = Plotter()
+    plotter.plot()
+    plotter.plot_ws()
