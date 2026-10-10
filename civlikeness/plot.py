@@ -155,7 +155,7 @@ class DataRow(NamedTuple):
     warshare: WarShare
 
 
-def color_map() -> LinearSegmentedColormap:
+def viridis_red() -> LinearSegmentedColormap:
     # Custom colormap: viridis extended past its yellow endpoint to red, so the
     # very top of the scale (a perfect 40) is red instead of stopping at yellow.
     viridis_rgb = plt.cm.viridis(np.linspace(0, 1, 200))[:, :3]
@@ -166,6 +166,13 @@ def color_map() -> LinearSegmentedColormap:
     return LinearSegmentedColormap.from_list(
         "viridis_red", np.vstack([viridis_rgb, ext_rgb[1:]])
     )
+
+
+def gist_rainbow() -> LinearSegmentedColormap:
+    """Sampled gist_rainbow: dark blue -> cyan -> green -> yellow -> red.
+    """
+    colors = plt.cm.gist_rainbow_r(np.linspace(0.25, 1, 256))
+    return LinearSegmentedColormap.from_list("ws_rainbow", colors)
 
 
 class Plotter:
@@ -199,6 +206,7 @@ class Plotter:
             chassis = sum(col_value(c) for c in CHASSIS_COLS)   # /30
             house = sum(col_value(c) for c in HOUSE_COLS)       # /10
             ws = WarShare.from_data(vals[WS_COL - 1])
+
             self._rows.append(DataRow(game, chassis, house, ws))
 
     def _annotate(
@@ -299,7 +307,7 @@ class Plotter:
             zorder=1
         )
 
-    def _plot_total_ref_lines(self) -> None:
+    def _plot_total_ref_lines(self, use_cmap=True) -> None:
         for total in (5, 10, 15, 20, 25, 30, 35):
             # For y = total - x, constrain the segment to:
             # 0 <= x <= 30 and 0 <= y <= 10.
@@ -310,7 +318,7 @@ class Plotter:
 
             y0 = total - x0
             y1 = total - x1
-            color = self._cmap(total / 40)
+            color = self._cmap(total / 40) if use_cmap else "#777777"
 
             self._ax.plot(
                 [x0, x1],
@@ -366,9 +374,6 @@ class Plotter:
         msg = f"Preparing {name} plot..." if name else "Preparing plot..."
         print(msg)
 
-        if self._cmap is None:
-            self._cmap = color_map()
-
         x = np.array([row.chassis for row in self._rows], dtype=float)
         y = np.array([row.house for row in self._rows], dtype=float)
 
@@ -376,6 +381,8 @@ class Plotter:
 
     def plot(self) -> None:
         x, y = self._prepare_plot()
+
+        self._cmap = viridis_red()
 
         # Color by total score (Chassis + House) on the nominal 0-40 scale.
         totals = x + y
@@ -447,17 +454,17 @@ class Plotter:
             dtype=float,
         )
 
-        grey = "0.55"
-        self._cmap.set_bad(grey)
+        self._cmap = gist_rainbow()
 
         fig, self._ax = plt.subplots(figsize=(16, 9))
 
-        # One scatter for every game. NaN WarShare values are masked by the
-        # colormap and drawn in the "bad" grey color.
+        # This is deliberately the only collection passed to adjustText.
+        # It contains only finite color values and is safe as an obstacle source.
+        numeric_mask = ~np.isnan(ws_values)
         self._sc = self._ax.scatter(
-            x,
-            y,
-            c=ws_values,
+            x[numeric_mask],
+            y[numeric_mask],
+            c=ws_values[numeric_mask],
             cmap=self._cmap,
             vmin=0,
             vmax=100,
@@ -467,6 +474,19 @@ class Plotter:
             zorder=3,
         )
 
+        # Plot N/A points separately, with literal grey.
+        na_mask = ~numeric_mask
+        if np.any(na_mask):
+            self._ax.scatter(
+                x[na_mask],
+                y[na_mask],
+                color="#808080",
+                s=70,
+                edgecolors="white",
+                linewidths=0.6,
+                zorder=3,
+            )
+
         self._ax.set_xlim(-1, 37)
         self._ax.set_ylim(-0.5, 11.5)
         self._ax.set_aspect("equal", adjustable="box")
@@ -475,17 +495,20 @@ class Plotter:
 
         self._ax.set_xlabel("Chassis (P1+P2+P3+P4+P6a+P7) / 30")
         self._ax.set_ylabel("House (P5+P6b) / 10")
-        self._ax.set_title("Civ-likeness: Chassis vs. House, colored by WarShare")
+        self._ax.set_title(
+            "Civ-likeness: Chassis vs. House, colored by WarShare\n"
+            "0%: Absent / 25%: Perpheral / 50%: Substantial / 75%: Core / 100%: Pure"
+        )
 
         self._ax.set_xticks(np.arange(0, 31, 2))
         self._ax.set_yticks(np.arange(0, 11, 1))
         self._ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
 
-        # Colorbar on the left, explicitly showing the five WarShare levels.
+        # Colorbar on the right, explicitly showing the five WarShare levels.
         cbar = fig.colorbar(
             self._sc,
             ax=self._ax,
-            location="left",
+            location="right",
             shrink=0.7,
             pad=0.02,
         )
@@ -495,6 +518,7 @@ class Plotter:
         cbar.set_label("WarShare (grey = N/A)")
 
         self._plot_diagonal()
+        self._plot_total_ref_lines(use_cmap=False)
 
         fig.tight_layout()
 
