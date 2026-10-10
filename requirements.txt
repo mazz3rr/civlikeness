@@ -1,3 +1,5 @@
 adjusttext
 matplotlib
+numpy
 openpyxl
+

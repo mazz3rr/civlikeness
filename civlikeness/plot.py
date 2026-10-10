@@ -9,8 +9,10 @@ span the same pixel range as Chassis), so the plot is a true 1:1 grid
 where 1 House point occupies the same physical length as 1 Chassis point.
 
 Recomputing from the pillar columns avoids parsing the "Ch/H" text string;
-if you prefer parsing, the equivalent line is given in a comment below.
 """
+
+# first version by Perplexity AI
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -20,6 +22,8 @@ import math
 import matplotlib.pyplot as plt
 import numpy as np
 import openpyxl
+from matplotlib.axes import Axes
+from matplotlib.collections import PathCollection
 from matplotlib.colors import LinearSegmentedColormap
 
 # ---------------------------------------------------------------------------
@@ -133,17 +137,7 @@ def load_rows() -> list[tuple[str, float, float]]:
     return out
 
 
-def main() -> None:
-    print("Loading data...")
-    data = load_rows()
-
-    print("Preparing plot...")
-    x = np.array([d[1] for d in data], dtype=float)   # Chassis 0..30
-    y = np.array([d[2] for d in data], dtype=float)   # House   0..10
-
-    # Color by total score (Chassis + House) on the nominal 0-40 scale.
-    totals = x + y
-
+def color_map() -> LinearSegmentedColormap:
     # Custom colormap: viridis extended past its yellow endpoint to red, so the
     # very top of the scale (a perfect 40) is red instead of stopping at yellow.
     viridis_rgb = plt.cm.viridis(np.linspace(0, 1, 200))[:, :3]
@@ -151,34 +145,16 @@ def main() -> None:
     red = np.array([1.0, 0.0, 0.0])
     n_ext = 60
     ext_rgb = np.array([np.linspace(yellow[i], red[i], n_ext) for i in range(3)]).T
-    cmap = LinearSegmentedColormap.from_list(
+    return LinearSegmentedColormap.from_list(
         "viridis_red", np.vstack([viridis_rgb, ext_rgb[1:]])
     )
 
-    fig, ax = plt.subplots(figsize=(16, 9))
 
-    # Uniform units: equal aspect ratio so 1 House unit == 1 Chassis unit in
-    # physical length. The axes' limits then define the visible region.
-    sc = ax.scatter(
-        x,
-        y,
-        c=totals,
-        cmap=cmap,
-        vmin=0,
-        vmax=40,
-        s=70,
-        edgecolors="white",
-        linewidths=0.6,
-        zorder=3
-    )
-
-    # Initial axes limits — generous padding so the dense top-right cluster
-    # can fan labels out into the empty space. adjustText with expand_axes=True
-    # may expand these further if it needs more room.
-    ax.set_xlim(-1, 37)
-    ax.set_ylim(-0.5, 11.5)
-    ax.set_aspect("equal", adjustable="box")   # <- the "uniform units" rule
-
+def annotate(
+    ax: Axes,
+    sc: PathCollection,
+    data: list[tuple[str, float | int, float | int]]
+) -> None:
     # Label every dot with adjustText, passing the scatter points themselves as
     # obstacles. The key parameters that make this work for the dense top-right
     # cluster (~20 games in a 4x2.5 area):
@@ -247,22 +223,8 @@ def main() -> None:
             ax.annotate(
                 n, (xi, yi), textcoords="offset points", xytext=(7, 5), fontsize=8, zorder=5)
 
-    # Axes limits are set above (before adjust_text) so expand_axes can
-    # push them further if needed. The aspect ratio is already set to equal.
-    ax.set_xlabel("Chassis  (P1+P2+P3+P4+P6a+P7)   / 30")
-    ax.set_ylabel("House  (P5+P6b)   / 10")
-    ax.set_title("Civ-likeness: Chassis vs. House")
 
-    # Light reference grid at every integer point.
-    ax.set_xticks(np.arange(0, 31, 2))
-    ax.set_yticks(np.arange(0, 11, 1))
-    ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
-
-    cbar = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-    cbar.set_label("Total Ch+H")
-    # Nominal 0-40 scale with 5-unit ticks (8 segments).
-    cbar.set_ticks(np.arange(0, 41, 5))
-
+def plot_diagonal(ax: Axes) -> None:
     # Reference line: the "3:1 ratio" diagonal from (0,0) to (30,10), i.e. a
     # House share of 1/4 of the total. Games above it are House-heavy
     # (relationship/ends-leaning); games below are Chassis-heavy (operational).
@@ -285,6 +247,124 @@ def main() -> None:
         rotation=math.degrees(math.atan2(10, 30)),
         zorder=1
     )
+
+
+def plot_total_ref_lines(ax: Axes, cmap: LinearSegmentedColormap) -> None:
+    for total in (5, 10, 15, 20, 25, 30, 35):
+        # For y = total - x, constrain the segment to:
+        # 0 <= x <= 30 and 0 <= y <= 10.
+        x0 = max(0, total - 10)
+        x1 = min(30, total)
+        if x0 > x1:
+            continue
+
+        y0 = total - x0
+        y1 = total - x1
+        color = cmap(total / 40)
+
+        ax.plot(
+            [x0, x1],
+            [y0, y1],
+            linestyle=":",
+            color=color,
+            linewidth=1.2,
+            alpha=0.8,
+            zorder=1,
+        )
+
+        if total == 35:
+            # Label at the right-hand endpoint of the segment.
+            ax.annotate(
+                f"total={total}",
+                xy=(x1, y1),
+                xytext=(0, 8),  # points: slightly above the endpoint
+                textcoords="offset points",
+                ha="left",
+                va="center",
+                rotation=-45,
+                rotation_mode="anchor",
+                fontsize=7,
+                color=color,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
+                annotation_clip=False,
+                zorder=2,
+            )
+        else:
+            # Label at the left-hand endpoint of the segment.
+            ax.annotate(
+                f"total={total}",
+                xy=(x0, y0),
+                xytext=(0, 8),  # points: slightly above the endpoint
+                textcoords="offset points",
+                ha="left",
+                va="center",
+                rotation=-45,
+                rotation_mode="anchor",
+                fontsize=7,
+                color=color,
+                bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
+                annotation_clip=False,
+                zorder=2,
+            )
+
+
+def main() -> None:
+    print("Loading data...")
+    data = load_rows()
+
+    print("Preparing plot...")
+    x = np.array([d[1] for d in data], dtype=float)   # Chassis 0..30
+    y = np.array([d[2] for d in data], dtype=float)   # House   0..10
+
+    # Color by total score (Chassis + House) on the nominal 0-40 scale.
+    totals = x + y
+
+    cmap = color_map()
+
+    fig, ax = plt.subplots(figsize=(16, 9))
+
+    # Uniform units: equal aspect ratio so 1 House unit == 1 Chassis unit in
+    # physical length. The axes' limits then define the visible region.
+    sc = ax.scatter(
+        x,
+        y,
+        c=totals,
+        cmap=cmap,
+        vmin=0,
+        vmax=40,
+        s=70,
+        edgecolors="white",
+        linewidths=0.6,
+        zorder=3
+    )
+
+    # Initial axes limits — generous padding so the dense top-right cluster
+    # can fan labels out into the empty space. adjustText with expand_axes=True
+    # may expand these further if it needs more room.
+    ax.set_xlim(-1, 37)
+    ax.set_ylim(-0.5, 11.5)
+    ax.set_aspect("equal", adjustable="box")   # <- the "uniform units" rule
+
+    annotate(ax, sc, data)
+
+    # Axes limits are set above (before adjust_text) so expand_axes can
+    # push them further if needed. The aspect ratio is already set to equal.
+    ax.set_xlabel("Chassis  (P1+P2+P3+P4+P6a+P7)   / 30")
+    ax.set_ylabel("House  (P5+P6b)   / 10")
+    ax.set_title("Civ-likeness: Chassis vs. House")
+
+    # Light reference grid at every integer point.
+    ax.set_xticks(np.arange(0, 31, 2))
+    ax.set_yticks(np.arange(0, 11, 1))
+    ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
+
+    cbar = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
+    cbar.set_label("Total Ch+H")
+    # Nominal 0-40 scale with 5-unit ticks (8 segments).
+    cbar.set_ticks(np.arange(0, 41, 5))
+
+    plot_diagonal(ax)
+    plot_total_ref_lines(ax, cmap)
 
     fig.tight_layout()
 
