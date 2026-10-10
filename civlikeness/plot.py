@@ -13,11 +13,11 @@ Recomputing from the pillar columns avoids parsing the "Ch/H" text string;
 
 # first version by Perplexity AI
 
-from __future__ import annotations
-
+import enum
 from pathlib import Path
 
 import math
+from typing import NamedTuple, Self
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -31,7 +31,7 @@ from matplotlib.colors import LinearSegmentedColormap
 # ---------------------------------------------------------------------------
 XLSX_PATH = Path(__file__).parent.parent / "assets" / "ledger.xlsx"
 SHEET = "ledger"
-HEADER_ROW = 8  # 1-based; data starts here (row 7 is the header)
+FIRST_ROW = 8  # 1-based; data starts here (row 7 is the header)
 VAR_DIR = Path("var")
 VAR_DIR.mkdir(parents=True, exist_ok=True)
 OUTPUT_PNG = VAR_DIR / "ch_h_plot.png"
@@ -40,11 +40,13 @@ OUTPUT_PNG = VAR_DIR / "ch_h_plot.png"
 #   A Game | B P1 Map | C P2 Expansion | D P3 Economy | E P4 Ladder
 #   F P5 Peers (H) | G P6a Abstraction | H P6b Polity/Endings (H) | I P7 Time
 #   J Ch/H | K Total | ...
-COL_GAME = 1
+GAME_COL = 1
 # Chassis pillars (non-(H) pillars):
-CHASSIS_COLS = [2, 3, 4, 5, 7, 9]   # P1, P2, P3, P4, P6a, P7
+CHASSIS_COLS = 2, 3, 4, 5, 7, 9   # P1, P2, P3, P4, P6a, P7
 # House pillars (the ones marked "(H)"):
-HOUSE_COLS = [6, 8]                # P5, P6b
+HOUSE_COLS = 6, 8                # P5, P6b
+WS_COL = 14
+WS_VALUES = "N/A", "0 %", "25 %", "50 %", "75 %", "100 %"
 
 # Short, recognizable labels for the dots. Anything not listed falls back to a
 # heuristic shortener below, so adding new games never breaks the plot.
@@ -114,26 +116,69 @@ def short_name(full: str) -> str:
     return base[:12]
 
 
-def load_rows() -> list[tuple[str, float, float]]:
-    """Return list of (short_name, chassis, house) recomputed from pillars.
+class WarShare(enum.Enum):
+    N_A = "N/A"
+    ABSENT = 0
+    PERIPHERAL = 25
+    SUBSTANTIAL = 50
+    CORE = 75
+    PURE = 100
+
+    @property
+    def is_na(self) -> bool:
+        return self is self.N_A
+
+    @classmethod
+    def from_data(cls, data: str) -> Self:
+        match data:
+            case "N/A":
+                return cls.N_A
+            case "0 %":
+                return cls.ABSENT
+            case "25 %":
+                return cls.PERIPHERAL
+            case "50 %":
+                return cls.SUBSTANTIAL
+            case "75 %":
+                return cls.CORE
+            case "100 %":
+                return cls.PURE
+            case _:
+                raise ValueError(f"Unknown WarShare value: '{data}', must be either of {WS_VALUES}")
+
+
+class DataRow(NamedTuple):
+    game: str
+    chassis: float
+    house: float
+    warshare: WarShare
+
+
+def load_rows() -> list[DataRow]:
+    """Return list of (short_name, chassis, house, warshare) recomputed from pillars.
     """
     wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
     ws = wb[SHEET]
 
-    out: list[tuple[str, float, float]] = []
-    for row in ws.iter_rows(min_row=HEADER_ROW, values_only=True):
-        game = row[COL_GAME - 1]
+    out: list[DataRow] = []
+    for i, row in enumerate(ws.iter_rows(min_row=FIRST_ROW, values_only=True)):
+        game = row[GAME_COL - 1]
         if game is None or str(game).strip() == "":
             continue
         vals = list(row)
 
-        def col(idx):
-            v = vals[idx - 1]
-            return float(v) if v is not None else 0.0
+        def col_value(col):
+            v = vals[col - 1]
+            if v is None:
+                raise ValueError(f"Column {col}, row {i + FIRST_ROW} has no value")
+            return float(v)
 
-        chassis = sum(col(c) for c in CHASSIS_COLS)   # /30
-        house = sum(col(c) for c in HOUSE_COLS)       # /10
-        out.append((short_name(str(game).strip()), chassis, house))
+        game = short_name(str(game).strip())
+        chassis = sum(col_value(c) for c in CHASSIS_COLS)   # /30
+        house = sum(col_value(c) for c in HOUSE_COLS)       # /10
+        ws = WarShare.from_data(vals[WS_COL - 1])
+        out.append(DataRow(game, chassis, house, ws))
+
     return out
 
 
@@ -153,7 +198,7 @@ def color_map() -> LinearSegmentedColormap:
 def annotate(
     ax: Axes,
     sc: PathCollection,
-    data: list[tuple[str, float | int, float | int]]
+    data: list[DataRow]
 ) -> None:
     # Label every dot with adjustText, passing the scatter points themselves as
     # obstacles. The key parameters that make this work for the dense top-right
@@ -174,7 +219,7 @@ def annotate(
             boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8)
         texts = [
             ax.text(xi, yi, n, fontsize=7, zorder=6, bbox=_LABEL_BBOX)
-            for n, xi, yi in data
+            for n, xi, yi, *_ in data
         ]
         adjust_text(
             texts,
@@ -219,7 +264,7 @@ def annotate(
             ),
         )
     except ImportError:
-        for n, xi, yi in data:
+        for n, xi, yi, *_ in data:
             ax.annotate(
                 n, (xi, yi), textcoords="offset points", xytext=(7, 5), fontsize=8, zorder=5)
 
