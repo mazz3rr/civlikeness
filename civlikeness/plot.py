@@ -29,7 +29,7 @@ from matplotlib.colors import LinearSegmentedColormap
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-XLSX_PATH = Path(__file__).parent.parent / "assets" / "ledger.xlsx"
+INPUT_XLSX = Path(__file__).parent.parent / "assets" / "ledger.xlsx"
 SHEET = "ledger"
 FIRST_ROW = 8  # 1-based; data starts here (row 7 is the header)
 VAR_DIR = Path("var")
@@ -154,34 +154,6 @@ class DataRow(NamedTuple):
     warshare: WarShare
 
 
-def load_rows() -> list[DataRow]:
-    """Return list of (short_name, chassis, house, warshare) recomputed from pillars.
-    """
-    wb = openpyxl.load_workbook(XLSX_PATH, data_only=True)
-    ws = wb[SHEET]
-
-    out: list[DataRow] = []
-    for i, row in enumerate(ws.iter_rows(min_row=FIRST_ROW, values_only=True)):
-        game = row[GAME_COL - 1]
-        if game is None or str(game).strip() == "":
-            continue
-        vals = list(row)
-
-        def col_value(col):
-            v = vals[col - 1]
-            if v is None:
-                raise ValueError(f"Column {col}, row {i + FIRST_ROW} has no value")
-            return float(v)
-
-        game = short_name(str(game).strip())
-        chassis = sum(col_value(c) for c in CHASSIS_COLS)   # /30
-        house = sum(col_value(c) for c in HOUSE_COLS)       # /10
-        ws = WarShare.from_data(vals[WS_COL - 1])
-        out.append(DataRow(game, chassis, house, ws))
-
-    return out
-
-
 def color_map() -> LinearSegmentedColormap:
     # Custom colormap: viridis extended past its yellow endpoint to red, so the
     # very top of the scale (a perfect 40) is red instead of stopping at yellow.
@@ -195,227 +167,253 @@ def color_map() -> LinearSegmentedColormap:
     )
 
 
-def annotate(
-    ax: Axes,
-    sc: PathCollection,
-    data: list[DataRow]
-) -> None:
-    # Label every dot with adjustText, passing the scatter points themselves as
-    # obstacles. The key parameters that make this work for the dense top-right
-    # cluster (~20 games in a 4x2.5 area):
-    #   - max_move=None: allow labels to displace arbitrarily far into the empty
-    #     space above/right of the cluster (default is only 10 points!)
-    #   - min_arrow_len: force a minimum leader-line length so labels are always
-    #     clearly separated from their dots
-    #   - objects=scatter: labels must avoid the dots themselves, not just each
-    #     other, so they don't sit on top of nearby points
-    try:
-        from adjustText import adjust_text  # type: ignore
-        # White halo behind each label so grid lines and the reference
-        # diagonal never cut through the text, even when a label sits near a
-        # dot or another label.
-        print("Adjusting labels...")
-        _LABEL_BBOX = dict(
-            boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8)
-        texts = [
-            ax.text(xi, yi, n, fontsize=7, zorder=6, bbox=_LABEL_BBOX)
-            for n, xi, yi, *_ in data
-        ]
-        adjust_text(
-            texts,
-            objects=sc,
-            # Allow unlimited displacement into the expanded plot margins.
-            max_move=None,
-            # Stronger repulsion so the dense cluster actually separates.
-            # force_text=(1.2, 1.5),
-            force_text=(1.5, 1.8),
-            force_static=(0.7, 0.9),
-            # Pull labels back toward their anchor dots so they don't drift
-            # far away (e.g. "FM26" floating loose, "Old World" hanging off
-            # the end of its leader line). Applied once a label strays
-            # further than pull_threshold points from its dot.
-            force_pull=(0.15, 0.15),
-            pull_threshold=8,
-            # Expand bounding boxes more aggressively so labels get real space.
-            expand=(1.4, 1.7),
-            # Let adjustText expand the axes limits if it needs more room.
-            expand_axes=True,
-            # Minimum leader-line length — ensures each label is pulled far
-            # enough from its dot to be traceable.
-            min_arrow_len=15,
-            iter_lim=5000,
-            # time_lim removed — let iter_lim drive convergence.
-            # Let labels move freely in all directions into the empty space.
-            only_move={
-                "text": "xy",
-                "static": "xy",
-                "explode": "xy",
-                "pull": "xy",
-            },
-            # Don't force labels inside the tick range — they can use the
-            # padded margin space we reserved.
-            ensure_inside_axes=False,
-            arrowprops=dict(
-                arrowstyle="-",
-                color="0.5",
-                lw=0.4,
-                shrinkA=3,
-                shrinkB=3,
-            ),
-        )
-    except ImportError:
-        for n, xi, yi, *_ in data:
-            ax.annotate(
-                n, (xi, yi), textcoords="offset points", xytext=(7, 5), fontsize=8, zorder=5)
+class Plotter:
+    def __init__(self, input_xlsx: str | Path = "", output_pgn: str | Path = "") -> None:
+        self._input_xlsx = Path(input_xlsx) if input_xlsx else INPUT_XLSX
+        self._output_pgn = Path(output_pgn) if output_pgn else OUTPUT_PNG
+        self._rows: list[DataRow] = []
+        self._cmap: LinearSegmentedColormap | None = None
+        self._ax: Axes | None = None
+        self._sc: PathCollection | None = None
 
+    def _load_rows(self) -> None:
+        """Return list of (short_name, chassis, house, warshare) recomputed from pillars.
+        """
+        wb = openpyxl.load_workbook(self._input_xlsx, data_only=True)
+        ws = wb[SHEET]
 
-def plot_diagonal(ax: Axes) -> None:
-    # Reference line: the "3:1 ratio" diagonal from (0,0) to (30,10), i.e. a
-    # House share of 1/4 of the total. Games above it are House-heavy
-    # (relationship/ends-leaning); games below are Chassis-heavy (operational).
-    # Dashed, semi-transparent, drawn under the points so it never crowds them.
-    ax.plot(
-        [0, 30],
-        [0, 10],
-        linestyle=(0, (5, 4)),
-        color="#444444",
-        alpha=0.6,
-        linewidth=1.3,
-        zorder=1
-    )
-    ax.text(
-        1.2,
-        0.55,
-        "3:1 ratio line  (House = ¼ of total)",
-        fontsize=8,
-        color="#555555",
-        rotation=math.degrees(math.atan2(10, 30)),
-        zorder=1
-    )
+        for i, row in enumerate(ws.iter_rows(min_row=FIRST_ROW, values_only=True)):
+            game = row[GAME_COL - 1]
+            if game is None or str(game).strip() == "":
+                continue
+            vals = list(row)
 
+            def col_value(col):
+                v = vals[col - 1]
+                if v is None:
+                    raise ValueError(f"Column {col}, row {i + FIRST_ROW} has no value")
+                return float(v)
 
-def plot_total_ref_lines(ax: Axes, cmap: LinearSegmentedColormap) -> None:
-    for total in (5, 10, 15, 20, 25, 30, 35):
-        # For y = total - x, constrain the segment to:
-        # 0 <= x <= 30 and 0 <= y <= 10.
-        x0 = max(0, total - 10)
-        x1 = min(30, total)
-        if x0 > x1:
-            continue
+            game = short_name(str(game).strip())
+            chassis = sum(col_value(c) for c in CHASSIS_COLS)   # /30
+            house = sum(col_value(c) for c in HOUSE_COLS)       # /10
+            ws = WarShare.from_data(vals[WS_COL - 1])
+            self._rows.append(DataRow(game, chassis, house, ws))
 
-        y0 = total - x0
-        y1 = total - x1
-        color = cmap(total / 40)
-
-        ax.plot(
-            [x0, x1],
-            [y0, y1],
-            linestyle=":",
-            color=color,
-            linewidth=1.2,
-            alpha=0.8,
-            zorder=1,
-        )
-
-        if total == 35:
-            # Label at the right-hand endpoint of the segment.
-            ax.annotate(
-                f"total={total}",
-                xy=(x1, y1),
-                xytext=(0, 8),  # points: slightly above the endpoint
-                textcoords="offset points",
-                ha="left",
-                va="center",
-                rotation=-45,
-                rotation_mode="anchor",
-                fontsize=7,
-                color=color,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
-                annotation_clip=False,
-                zorder=2,
+    def _annotate(self) -> None:
+        # Label every dot with adjustText, passing the scatter points themselves as
+        # obstacles. The key parameters that make this work for the dense top-right
+        # cluster (~20 games in a 4x2.5 area):
+        #   - max_move=None: allow labels to displace arbitrarily far into the empty
+        #     space above/right of the cluster (default is only 10 points!)
+        #   - min_arrow_len: force a minimum leader-line length so labels are always
+        #     clearly separated from their dots
+        #   - objects=scatter: labels must avoid the dots themselves, not just each
+        #     other, so they don't sit on top of nearby points
+        try:
+            from adjustText import adjust_text  # type: ignore
+            # White halo behind each label so grid lines and the reference
+            # diagonal never cut through the text, even when a label sits near a
+            # dot or another label.
+            print("Adjusting labels...")
+            _LABEL_BBOX = dict(
+                boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8)
+            texts = [
+                self._ax.text(xi, yi, n, fontsize=7, zorder=6, bbox=_LABEL_BBOX)
+                for n, xi, yi, *_ in self._rows
+            ]
+            adjust_text(
+                texts,
+                objects=self._sc,
+                # Allow unlimited displacement into the expanded plot margins.
+                max_move=None,
+                # Stronger repulsion so the dense cluster actually separates.
+                # force_text=(1.2, 1.5),
+                force_text=(1.5, 1.8),
+                force_static=(0.7, 0.9),
+                # Pull labels back toward their anchor dots so they don't drift
+                # far away (e.g. "FM26" floating loose, "Old World" hanging off
+                # the end of its leader line). Applied once a label strays
+                # further than pull_threshold points from its dot.
+                force_pull=(0.15, 0.15),
+                pull_threshold=8,
+                # Expand bounding boxes more aggressively so labels get real space.
+                expand=(1.4, 1.7),
+                # Let adjustText expand the axes limits if it needs more room.
+                expand_axes=True,
+                # Minimum leader-line length — ensures each label is pulled far
+                # enough from its dot to be traceable.
+                min_arrow_len=15,
+                iter_lim=5000,
+                # time_lim removed — let iter_lim drive convergence.
+                # Let labels move freely in all directions into the empty space.
+                only_move={
+                    "text": "xy",
+                    "static": "xy",
+                    "explode": "xy",
+                    "pull": "xy",
+                },
+                # Don't force labels inside the tick range — they can use the
+                # padded margin space we reserved.
+                ensure_inside_axes=False,
+                arrowprops=dict(
+                    arrowstyle="-",
+                    color="0.5",
+                    lw=0.4,
+                    shrinkA=3,
+                    shrinkB=3,
+                ),
             )
-        else:
-            # Label at the left-hand endpoint of the segment.
-            ax.annotate(
-                f"total={total}",
-                xy=(x0, y0),
-                xytext=(0, 8),  # points: slightly above the endpoint
-                textcoords="offset points",
-                ha="left",
-                va="center",
-                rotation=-45,
-                rotation_mode="anchor",
-                fontsize=7,
+        except ImportError:
+            for n, xi, yi, *_ in self._rows:
+                self._ax.annotate(
+                    n, (xi, yi), textcoords="offset points", xytext=(7, 5), fontsize=8, zorder=5)
+
+    def _plot_diagonal(self) -> None:
+        # Reference line: the "3:1 ratio" diagonal from (0,0) to (30,10), i.e. a
+        # House share of 1/4 of the total. Games above it are House-heavy
+        # (relationship/ends-leaning); games below are Chassis-heavy (operational).
+        # Dashed, semi-transparent, drawn under the points so it never crowds them.
+        self._ax.plot(
+            [0, 30],
+            [0, 10],
+            linestyle=(0, (5, 4)),
+            color="#444444",
+            alpha=0.6,
+            linewidth=1.3,
+            zorder=1
+        )
+        self._ax.text(
+            1.2,
+            0.55,
+            "3:1 ratio line  (House = ¼ of total)",
+            fontsize=8,
+            color="#555555",
+            rotation=math.degrees(math.atan2(10, 30)),
+            zorder=1
+        )
+
+    def _plot_total_ref_lines(self) -> None:
+        for total in (5, 10, 15, 20, 25, 30, 35):
+            # For y = total - x, constrain the segment to:
+            # 0 <= x <= 30 and 0 <= y <= 10.
+            x0 = max(0, total - 10)
+            x1 = min(30, total)
+            if x0 > x1:
+                continue
+
+            y0 = total - x0
+            y1 = total - x1
+            color = self._cmap(total / 40)
+
+            self._ax.plot(
+                [x0, x1],
+                [y0, y1],
+                linestyle=":",
                 color=color,
-                bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
-                annotation_clip=False,
-                zorder=2,
+                linewidth=1.2,
+                alpha=0.8,
+                zorder=1,
             )
 
+            if total == 35:
+                # Label at the right-hand endpoint of the segment.
+                self._ax.annotate(
+                    f"total={total}",
+                    xy=(x1, y1),
+                    xytext=(0, 8),  # points: slightly above the endpoint
+                    textcoords="offset points",
+                    ha="left",
+                    va="center",
+                    rotation=-45,
+                    rotation_mode="anchor",
+                    fontsize=7,
+                    color=color,
+                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
+                    annotation_clip=False,
+                    zorder=2,
+                )
+            else:
+                # Label at the left-hand endpoint of the segment.
+                self._ax.annotate(
+                    f"total={total}",
+                    xy=(x0, y0),
+                    xytext=(0, 8),  # points: slightly above the endpoint
+                    textcoords="offset points",
+                    ha="left",
+                    va="center",
+                    rotation=-45,
+                    rotation_mode="anchor",
+                    fontsize=7,
+                    color=color,
+                    bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
+                    annotation_clip=False,
+                    zorder=2,
+                )
 
-def main() -> None:
-    print("Loading data...")
-    data = load_rows()
+    def plot(self) -> None:
+        print("Loading data...")
+        self._load_rows()
 
-    print("Preparing plot...")
-    x = np.array([d[1] for d in data], dtype=float)   # Chassis 0..30
-    y = np.array([d[2] for d in data], dtype=float)   # House   0..10
+        print("Preparing plot...")
+        x = np.array([row[1] for row in self._rows], dtype=float)   # Chassis 0..30
+        y = np.array([row[2] for row in self._rows], dtype=float)   # House   0..10
 
-    # Color by total score (Chassis + House) on the nominal 0-40 scale.
-    totals = x + y
+        # Color by total score (Chassis + House) on the nominal 0-40 scale.
+        totals = x + y
 
-    cmap = color_map()
+        self._cmap = color_map()
 
-    fig, ax = plt.subplots(figsize=(16, 9))
+        fig, self._ax = plt.subplots(figsize=(16, 9))
 
-    # Uniform units: equal aspect ratio so 1 House unit == 1 Chassis unit in
-    # physical length. The axes' limits then define the visible region.
-    sc = ax.scatter(
-        x,
-        y,
-        c=totals,
-        cmap=cmap,
-        vmin=0,
-        vmax=40,
-        s=70,
-        edgecolors="white",
-        linewidths=0.6,
-        zorder=3
-    )
+        # Uniform units: equal aspect ratio so 1 House unit == 1 Chassis unit in
+        # physical length. The axes' limits then define the visible region.
+        self._sc = self._ax.scatter(
+            x,
+            y,
+            c=totals,
+            cmap=self._cmap,
+            vmin=0,
+            vmax=40,
+            s=70,
+            edgecolors="white",
+            linewidths=0.6,
+            zorder=3
+        )
 
-    # Initial axes limits — generous padding so the dense top-right cluster
-    # can fan labels out into the empty space. adjustText with expand_axes=True
-    # may expand these further if it needs more room.
-    ax.set_xlim(-1, 37)
-    ax.set_ylim(-0.5, 11.5)
-    ax.set_aspect("equal", adjustable="box")   # <- the "uniform units" rule
+        # Initial axes limits — generous padding so the dense top-right cluster
+        # can fan labels out into the empty space. adjustText with expand_axes=True
+        # may expand these further if it needs more room.
+        self._ax.set_xlim(-1, 37)
+        self._ax.set_ylim(-0.5, 11.5)
+        self._ax.set_aspect("equal", adjustable="box")   # <- the "uniform units" rule
 
-    annotate(ax, sc, data)
+        self._annotate()
 
-    # Axes limits are set above (before adjust_text) so expand_axes can
-    # push them further if needed. The aspect ratio is already set to equal.
-    ax.set_xlabel("Chassis  (P1+P2+P3+P4+P6a+P7)   / 30")
-    ax.set_ylabel("House  (P5+P6b)   / 10")
-    ax.set_title("Civ-likeness: Chassis vs. House")
+        # Axes limits are set above (before adjust_text) so expand_axes can
+        # push them further if needed. The aspect ratio is already set to equal.
+        self._ax.set_xlabel("Chassis  (P1+P2+P3+P4+P6a+P7)   / 30")
+        self._ax.set_ylabel("House  (P5+P6b)   / 10")
+        self._ax.set_title("Civ-likeness: Chassis vs. House")
 
-    # Light reference grid at every integer point.
-    ax.set_xticks(np.arange(0, 31, 2))
-    ax.set_yticks(np.arange(0, 11, 1))
-    ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
+        # Light reference grid at every integer point.
+        self._ax.set_xticks(np.arange(0, 31, 2))
+        self._ax.set_yticks(np.arange(0, 11, 1))
+        self._ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
 
-    cbar = fig.colorbar(sc, ax=ax, shrink=0.7, pad=0.02)
-    cbar.set_label("Total Ch+H")
-    # Nominal 0-40 scale with 5-unit ticks (8 segments).
-    cbar.set_ticks(np.arange(0, 41, 5))
+        cbar = fig.colorbar(self._sc, ax=self._ax, shrink=0.7, pad=0.02)
+        cbar.set_label("Total Ch+H")
+        # Nominal 0-40 scale with 5-unit ticks (8 segments).
+        cbar.set_ticks(np.arange(0, 41, 5))
 
-    plot_diagonal(ax)
-    plot_total_ref_lines(ax, cmap)
+        self._plot_diagonal()
+        self._plot_total_ref_lines()
 
-    fig.tight_layout()
+        fig.tight_layout()
 
-    fig.savefig(OUTPUT_PNG, dpi=150)
-    print(f"Plotted {len(data)} games -> {OUTPUT_PNG.resolve()}")
+        fig.savefig(self._output_pgn, dpi=150)
+        print(f"Plotted {len(self._rows)} games -> {self._output_pgn.resolve()}")
 
 
 if __name__ == "__main__":
-    main()
+    Plotter().plot()
