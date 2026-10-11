@@ -76,6 +76,7 @@ SHORT_NAMES = {
     "EU4 (2013–2025, final)":                               "EU4",
     "EVE Online (current)":                                 "EVE",
     "Endless Legend (2014, Symbiosis)":                     "EL",
+    "Fantasy General (1996, +Island Challenge)":            "FG",
     "Football Manager 26 (final)":                          "FM26",
     "Galactic Civilizations 2 (2006–08, Twilight)":         "GalCiv2",
     "Galactic Civilizations 3 (2014–19, Retribution)":      "GalCiv3",
@@ -89,6 +90,7 @@ SHORT_NAMES = {
     "Offworld Trading Company (2016, final)":               "OTC",
     "Old World (2021, 7 DLC)":                              "OW",
     "SimCity 4 (2003, Deluxe+641)":                         "SC4",
+    "SpellForce: Conquest of Eo (2023–25, +3 DLC)":         "Eo",
     "StarCraft II (melee, vs-AI)":                          "SC2",
     "Stellaris (2016–current)":                             "Stellaris",
     "The Sims 4 (live)":                                    "Sims4",
@@ -365,8 +367,10 @@ class Plotter:
                     zorder=2,
                 )
 
-    def _prepare_plot(self, name="") -> tuple[
-        ndarray[tuple[Any, ...], dtype[Any]], ndarray[tuple[Any, ...], dtype[Any]]]:
+    def _prepare_plot(
+        self,
+        name=""
+    ) -> tuple[ndarray[tuple[Any, ...], dtype[Any]], ndarray[tuple[Any, ...], dtype[Any]]]:
         if not self._rows:
             print("Loading data...")
             self._load_rows()
@@ -440,8 +444,8 @@ class Plotter:
     def plot_ws(self) -> None:
         """Plot Chassis vs. House, coloring games by WarShare.
 
-        WarShare values 0-100 use the same viridis-to-red colormap as the
-        total-score plot. Games with WarShare == "N/A" are shown in grey.
+        WarShare values 0/25/50/75100 use a sampled gist rainbow colormap.
+        Games with WarShare == "N/A" are shown in grey.
         """
         x, y = self._prepare_plot(name="Warshare")
 
@@ -497,7 +501,7 @@ class Plotter:
         self._ax.set_ylabel("House (P5+P6b) / 10")
         self._ax.set_title(
             "Civ-likeness: Chassis vs. House, colored by WarShare\n"
-            "0%: Absent / 25%: Perpheral / 50%: Substantial / 75%: Core / 100%: Pure"
+            "Absent: 0% / Peripheral: 25% / Substantial: 50% / Core: 75% / Pure: 100%"
         )
 
         self._ax.set_xticks(np.arange(0, 31, 2))
