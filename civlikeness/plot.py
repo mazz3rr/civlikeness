@@ -61,7 +61,7 @@ SHORT_NAMES = {
     "Beyond Earth (2014, +RT)":                             "BE",
     "Black & White (2001, +Creature Isle)":                 "B&W",
     "CK3 (2020–2026)":                                      "CK3",
-    "Call to Power (1999, v1.2)":                           "CtP",
+    "Call to Power (1999, v1.2)":                           "CtP1",
     "Call to Power II (2000, retail final)":                "CtP2",
     "Civ1 (1991)":                                          "Civ1",
     "Civ2 (1996)":                                          "Civ2",
@@ -74,6 +74,7 @@ SHORT_NAMES = {
     "Conquest of Elysium 5 (2021–current)":                 "CoE5",
     "Dominions 6 (2024–current, 6.37)":                     "Dom6",
     "Doom (1993, Ultimate)":                                "Doom",
+    "Eador: Genesis (2009–13, final)":                      "EG",
     "EU4 (2013–2025, final)":                               "EU4",
     "EVE Online (current)":                                 "EVE",
     "Endless Legend (2014, Symbiosis)":                     "EL",
@@ -92,6 +93,7 @@ SHORT_NAMES = {
     "Old World (2021, 7 DLC)":                              "OW",
     "Populous (1989, +The Promised Lands)":                 "Populous",
     "SimCity 4 (2003, Deluxe+641)":                         "SC4",
+    "Songs of Conquest (2022–current, v1.4 + faction DLC)": "SoC",
     "SpellForce: Conquest of Eo (2023–25, +3 DLC)":         "Eo",
     "StarCraft II (melee, vs-AI)":                          "SC2",
     "Stellaris (2016–current)":                             "Stellaris",
@@ -180,6 +182,11 @@ def gist_rainbow() -> LinearSegmentedColormap:
 
 
 class Plotter:
+    DPI = 200
+    LABELS_FONTSIZE = 6
+    REFLINES_FONTSIZE = 7
+    DIAGONAL_FONTSIZE = 8
+
     def __init__(self, input_xlsx: str | Path = "", output_pgn: str | Path = "") -> None:
         self._input_xlsx = Path(input_xlsx) if input_xlsx else INPUT_XLSX
         self._output_pgn = Path(output_pgn) if output_pgn else OUTPUT_PNG
@@ -236,7 +243,7 @@ class Plotter:
             _LABEL_BBOX = dict(
                 boxstyle="round,pad=0.15", facecolor="white", edgecolor="none", alpha=0.8)
             texts = [
-                self._ax.text(xi, yi, n, fontsize=7, zorder=6, bbox=_LABEL_BBOX)
+                self._ax.text(xi, yi, n, fontsize=self.LABELS_FONTSIZE, zorder=6, bbox=_LABEL_BBOX)
                 for n, xi, yi, *_ in self._rows
             ]
             adjust_text(
@@ -285,7 +292,8 @@ class Plotter:
         except ImportError:
             for n, xi, yi, *_ in self._rows:
                 self._ax.annotate(
-                    n, (xi, yi), textcoords="offset points", xytext=(7, 5), fontsize=8, zorder=5)
+                    n, (xi, yi), textcoords="offset points", xytext=(7, 5),
+                    fontsize=self.LABELS_FONTSIZE, zorder=5)
 
     def _plot_diagonal(self) -> None:
         # Reference line: the "3:1 ratio" diagonal from (0,0) to (30,10), i.e. a
@@ -305,7 +313,7 @@ class Plotter:
             1.2,
             0.55,
             "3:1 ratio line  (House = ¼ of total)",
-            fontsize=8,
+            fontsize=self.DIAGONAL_FONTSIZE,
             color="#555555",
             rotation=math.degrees(math.atan2(10, 30)),
             zorder=1
@@ -345,7 +353,7 @@ class Plotter:
                     va="center",
                     rotation=-45,
                     rotation_mode="anchor",
-                    fontsize=7,
+                    fontsize=self.REFLINES_FONTSIZE,
                     color=color,
                     bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
                     annotation_clip=False,
@@ -362,7 +370,7 @@ class Plotter:
                     va="center",
                     rotation=-45,
                     rotation_mode="anchor",
-                    fontsize=7,
+                    fontsize=self.REFLINES_FONTSIZE,
                     color=color,
                     bbox=dict(facecolor="white", edgecolor="none", alpha=0.8, pad=1.5),
                     annotation_clip=False,
@@ -440,7 +448,7 @@ class Plotter:
 
         fig.tight_layout()
 
-        fig.savefig(self._output_pgn, dpi=150)
+        fig.savefig(self._output_pgn, dpi=self.DPI)
         print(f"Plotted {len(self._rows)} games -> {self._output_pgn.resolve()}")
 
     def plot_ws(self) -> None:
@@ -531,7 +539,7 @@ class Plotter:
         output_path = self._output_pgn.with_name(
             self._output_pgn.stem + "_ws" + self._output_pgn.suffix
         )
-        fig.savefig(output_path, dpi=150)
+        fig.savefig(output_path, dpi=self.DPI)
         print(f"Plotted {len(self._rows)} games -> {output_path.resolve()}")
 
 
