@@ -52,6 +52,7 @@ WS_VALUES = "N/A", "0 %", "25 %", "50 %", "75 %", "100 %"
 # Short, recognizable labels for the dots. Anything not listed falls back to a
 # heuristic shortener below, so adding new games never breaks the plot.
 SHORT_NAMES = {
+    "Against the Storm (2023–current, +2 DLC)":             "AtS",
     "Age of Empires II: DE (2019–current)":                 "AoE2",
     "Age of Wonders 3 (2014)":                              "AoW3",
     "Age of Wonders 4 (2023–current)":                      "AoW4",
@@ -80,6 +81,7 @@ SHORT_NAMES = {
     "Endless Legend (2014, Symbiosis)":                     "EL",
     "Fantasy General (1996, +Island Challenge)":            "FG",
     "Football Manager 26 (final)":                          "FM26",
+    "Frostpunk (2018–20, +Season Pass)":                    "FP",
     "Galactic Civilizations 2 (2006–08, Twilight)":         "GalCiv2",
     "Galactic Civilizations 3 (2014–19, Retribution)":      "GalCiv3",
     "Galactic Civilizations 4 (2022–current, Supernova)":   "GalCiv4",
