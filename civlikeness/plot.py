@@ -25,6 +25,7 @@ import openpyxl
 from matplotlib.axes import Axes
 from matplotlib.collections import PathCollection
 from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.figure import Figure
 from numpy import dtype, ndarray
 
 # ---------------------------------------------------------------------------
@@ -51,7 +52,7 @@ WS_VALUES = "N/A", "0 %", "25 %", "50 %", "75 %", "100 %"
 
 # Short, recognizable labels for the dots. Anything not listed falls back to a
 # heuristic shortener below, so adding new games never breaks the plot.
-SHORT_NAMES = {
+ALIASES = {
     "Against the Storm (2023–current, +2 DLC)":             "AtS",
     "Age of Empires II: DE (2019–current)":                 "AoE2",
     "Age of Wonders 3 (2014)":                              "AoW3",
@@ -109,13 +110,13 @@ SHORT_NAMES = {
 }
 
 
-def short_name(full: str) -> str:
+def alias(full_name: str) -> str:
     """Return a short label for a game, with a heuristic fallback.
     """
-    if sn := SHORT_NAMES.get(full):
+    if sn := ALIASES.get(full_name):
         return sn
     # Fallback: take everything before the first '(' and trim.
-    base = full.split("(", 1)[0].strip() if "(" in full else full.strip()
+    base = full_name.split("(", 1)[0].strip() if "(" in full_name else full_name.strip()
     if len(base) <= 14:
         return base
     # Otherwise keep initials of the first few words.
@@ -194,8 +195,16 @@ class Plotter:
         self._output_pgn = Path(output_pgn) if output_pgn else OUTPUT_PNG
         self._rows: list[DataRow] = []
         self._cmap: LinearSegmentedColormap | None = None
+        self._fig: Figure | None = None
         self._ax: Axes | None = None
         self._sc: PathCollection | None = None
+
+    @staticmethod
+    def _col_value(row: list, col: int, idx: int) -> float:
+        v = row[col - 1]
+        if v is None:
+            raise ValueError(f"Column {col}, row {idx + FIRST_ROW} has no value")
+        return float(v)
 
     def _load_rows(self) -> None:
         """Return list of (short_name, chassis, house, warshare) recomputed from pillars.
@@ -209,18 +218,12 @@ class Plotter:
                 continue
             vals = list(row)
 
-            def col_value(col):
-                v = vals[col - 1]
-                if v is None:
-                    raise ValueError(f"Column {col}, row {i + FIRST_ROW} has no value")
-                return float(v)
+            game = alias(str(game).strip())
+            chassis = sum(self._col_value(vals, c, i) for c in CHASSIS_COLS)   # /30
+            house = sum(self._col_value(vals, c, i) for c in HOUSE_COLS)       # /10
+            war_share = WarShare.from_data(vals[WS_COL - 1])
 
-            game = short_name(str(game).strip())
-            chassis = sum(col_value(c) for c in CHASSIS_COLS)   # /30
-            house = sum(col_value(c) for c in HOUSE_COLS)       # /10
-            ws = WarShare.from_data(vals[WS_COL - 1])
-
-            self._rows.append(DataRow(game, chassis, house, ws))
+            self._rows.append(DataRow(game, chassis, house, war_share))
 
     def _annotate(
         self,
@@ -390,6 +393,8 @@ class Plotter:
         msg = f"Preparing {name} plot..." if name else "Preparing plot..."
         print(msg)
 
+        self._fig, self._ax = plt.subplots(figsize=(16, 9))
+
         x = np.array([row.chassis for row in self._rows], dtype=float)
         y = np.array([row.house for row in self._rows], dtype=float)
 
@@ -402,8 +407,6 @@ class Plotter:
 
         # Color by total score (Chassis + House) on the nominal 0-40 scale.
         totals = x + y
-
-        fig, self._ax = plt.subplots(figsize=(16, 9))
 
         # Uniform units: equal aspect ratio so 1 House unit == 1 Chassis unit in
         # physical length. The axes' limits then define the visible region.
@@ -440,7 +443,7 @@ class Plotter:
         self._ax.set_yticks(np.arange(0, 11, 1))
         self._ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
 
-        cbar = fig.colorbar(self._sc, ax=self._ax, shrink=0.7, pad=0.02)
+        cbar = self._fig.colorbar(self._sc, ax=self._ax, shrink=0.7, pad=0.02)
         cbar.set_label("Total Ch+H")
         # Nominal 0-40 scale with 5-unit ticks (8 segments).
         cbar.set_ticks(np.arange(0, 41, 5))
@@ -448,15 +451,15 @@ class Plotter:
         self._plot_diagonal()
         self._plot_total_ref_lines()
 
-        fig.tight_layout()
+        self._fig.tight_layout()
 
-        fig.savefig(self._output_pgn, dpi=self.DPI)
+        self._fig.savefig(self._output_pgn, dpi=self.DPI)
         print(f"Plotted {len(self._rows)} games -> {self._output_pgn.resolve()}")
 
     def plot_ws(self) -> None:
         """Plot Chassis vs. House, coloring games by WarShare.
 
-        WarShare values 0/25/50/75100 use a sampled gist rainbow colormap.
+        WarShare values 0/25/50/75/100 use a sampled gist rainbow colormap.
         Games with WarShare == "N/A" are shown in grey.
         """
         x, y = self._prepare_plot(name="Warshare")
@@ -471,8 +474,6 @@ class Plotter:
         )
 
         self._cmap = gist_rainbow()
-
-        fig, self._ax = plt.subplots(figsize=(16, 9))
 
         # This is deliberately the only collection passed to adjustText.
         # It contains only finite color values and is safe as an obstacle source.
@@ -521,7 +522,7 @@ class Plotter:
         self._ax.grid(True, which="both", linestyle=":", linewidth=0.5, color="0.8", zorder=0)
 
         # Colorbar on the right, explicitly showing the five WarShare levels.
-        cbar = fig.colorbar(
+        cbar = self._fig.colorbar(
             self._sc,
             ax=self._ax,
             location="right",
@@ -536,12 +537,12 @@ class Plotter:
         self._plot_diagonal()
         self._plot_total_ref_lines(use_cmap=False)
 
-        fig.tight_layout()
+        self._fig.tight_layout()
 
         output_path = self._output_pgn.with_name(
             self._output_pgn.stem + "_ws" + self._output_pgn.suffix
         )
-        fig.savefig(output_path, dpi=self.DPI)
+        self._fig.savefig(output_path, dpi=self.DPI)
         print(f"Plotted {len(self._rows)} games -> {output_path.resolve()}")
 
 
